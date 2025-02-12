@@ -1,0 +1,6 @@
+flask
+pika
+redis
+flask-cors
+pyjwt 
+requests

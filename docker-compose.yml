@@ -1,0 +1,15 @@
+services:
+  coordinador:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: coordinador
+    image: coordinador:latest
+    ports:
+      - 8090:8080
+    networks:
+      - red_ej2
+
+networks:
+  red_ej2:
+    external: true
