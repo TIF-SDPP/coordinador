@@ -81,7 +81,7 @@ def process_packages():
             time.sleep(60)        
 
 # Connect to RabbitMQ server
-connection = pika.BlockingConnection(pika.ConnectionParameters(host='rabbit1', port=5672, credentials=pika.PlainCredentials('rabbitmq', 'rabbitmq')))
+connection = pika.BlockingConnection(pika.ConnectionParameters(host='service-rabbitmq.default.svc.cluster.local', port=5672, credentials=pika.PlainCredentials('guest', 'guest')))
 
 
 channel = connection.channel()
