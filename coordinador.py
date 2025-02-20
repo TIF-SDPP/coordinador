@@ -195,7 +195,37 @@ def receive_solved_task():
           
     else:
         return jsonify({'message': 'Invalid hash. Discarding the package.'}), 400
-        
+
+@app.route('/metrics', methods=['GET'])
+def get_metrics():
+    workers = {
+        "worker_cpu": {"cant": 0, "processing_time": 0},
+        "worker_gpu": {"cant": 0, "processing_time": 0},
+        "worker_user": {"cant": 0, "processing_time": 0}
+    }
+
+    blocks = redis_utils.redis_client.lrange('blockchain', 0, -1)
+
+    for block in blocks:
+        try:
+            block_data = json.loads(block)
+            worker_type = block_data.get("worker_type")
+            timestamp = block_data.get("timestamp", 0)
+
+            if worker_type in workers:
+                workers[worker_type]["cant"] += 1
+                workers[worker_type]["processing_time"] += timestamp
+        except json.JSONDecodeError:
+            continue  # Ignorar bloques corruptos
+
+
+    for worker_type, data in workers.items():
+            if data["cant"] > 0:
+                data["processing_time"] = data["processing_time"] / data["cant"]
+
+    return jsonify({'data': workers}), 200
+
+
 # Run the process_packages method in a separate thread
 import threading
 process_packages_thread = threading.Thread(target=process_packages)
