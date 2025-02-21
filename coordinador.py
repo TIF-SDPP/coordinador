@@ -80,8 +80,21 @@ def process_packages():
             
             time.sleep(60)        
 
+
 # Connect to RabbitMQ server
-connection = pika.BlockingConnection(pika.ConnectionParameters(host='service-rabbitmq.default.svc.cluster.local', port=5672, credentials=pika.PlainCredentials('guest', 'guest')))
+
+def connect_rabbitmq():
+    while True:
+        try:
+            connection = pika.BlockingConnection(pika.ConnectionParameters(host='service-rabbitmq.default.svc.cluster.local', port=5672, credentials=pika.PlainCredentials('guest', 'guest')))
+            return connection
+        except pika.exceptions.AMQPConnectionError:
+            print("Fallo en la conexión, reintentando en 5 segundos...")
+            time.sleep(5)
+
+connection = connect_rabbitmq()
+
+
 
 
 channel = connection.channel()
