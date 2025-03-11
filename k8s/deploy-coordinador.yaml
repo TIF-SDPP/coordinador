@@ -20,7 +20,7 @@ spec:
     spec:
       containers:
       - name: coordinador
-        image: leoduville5/coordinador:latest
+        image: leoduville5/coordinador:v1
         resources:
           requests:
             memory: "100Mi"
