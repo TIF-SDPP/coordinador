@@ -68,7 +68,7 @@ def process_packages():
                 block = {
                     "id": block_id,
                     "transactions": package,
-                    "prefix": "000",  # Placeholder for difficulty
+                    "prefix": "0000",  # Placeholder for difficulty
                     "base_string_chain": "A4FC",  # hexa for the goal
                     "blockchain_content": last_element["blockchain_content"] if last_element else "[]",  # the blockchain inmutability
                     "random_num_max": max_random
