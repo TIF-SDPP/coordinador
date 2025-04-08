@@ -211,8 +211,11 @@ def receive_solved_task():
 
             if is_user:
                 try:
+                    print("data is user")
+                    print(len(data.get('prefix')))
                     user_id = data.get('user_id')
-                    reward_amount = 10  # Aca hay que ver si es algo fijo o depende de algun parámetro
+                    difficulty = len(data.get('prefix'))
+                    reward_amount = 10 * difficulty # Aca hay que ver si es algo fijo o depende de algun parámetro
 
                     if user_id:
                         reward_tx = {
