@@ -31,4 +31,5 @@ class RedisUtils:
             if 'id' in msg and msg['id'] == id:
                 return True
         return False
+
 # The module can be used after import by creating an instance of RedisUtils

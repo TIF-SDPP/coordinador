@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: coordinador
-    image: coordinador:latest
+    image: coordinador:v3
     ports:
       - 8090:8080
     networks:

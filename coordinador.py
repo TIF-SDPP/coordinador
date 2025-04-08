@@ -151,9 +151,6 @@ def get_balance(user_id):
 def receive_solved_task():
     data = request.get_json()
 
-    
-
-    
     # Calculate the hash using the provided number and base string
     combined_data = f"{data['number']}{data['base_string_chain']}{data['blockchain_content']}"
     calculated_hash = format(enhanced_hash(combined_data), '08x')
@@ -203,8 +200,35 @@ def receive_solved_task():
             print("------final-block-------")
             
             redis_utils.post_message(message=data)
-            
-            return jsonify({'message': 'Block validated and added to the blockchain.'}), 201
+
+            # If a user, give a gift
+
+            is_user = data.get("worker_user") == "true"  # Convertir a booleano
+
+            if is_user:
+                try:
+                    user_id = data.get('user_id')
+                    reward_amount = 10  # Aca hay que ver si es algo fijo o depende de algun parámetro
+
+                    if user_id:
+                        reward_tx = {
+                            "user_from": "universal_account",
+                            "user_to": user_id,
+                            "amount": reward_amount
+                        }
+
+                        # Enviamos esta transacción al endpoint /transaction (misma app)
+                        requests.post("http://localhost:8080/transaction", json=reward_tx)
+
+                        print(f"Recompensa enviada a {user_id}: {reward_amount} tokens")
+                    else:
+                        print("No se encontró user_id para recompensa")
+
+                except Exception as e:
+                    print(f"Error al enviar recompensa: {str(e)}")
+
+
+        return jsonify({'message': 'Block validated and added to the blockchain.'}), 201
           
     else:
         return jsonify({'message': 'Invalid hash. Discarding the package.'}), 400
@@ -238,6 +262,32 @@ def get_metrics():
 
     return jsonify({'data': workers}), 200
 
+def create_genesis_block():
+    genesis_block = {
+        "id": "genesis_block",
+        "hash": "00000000",  # Hash fijo o generado
+        "previous_block": None,
+        "blockchain_content": "",
+        "timestamp": time.time(),
+        "transactions": [
+            {
+                "user_from": "system",  # o "null"
+                "user_to": "universal_account",
+                "amount": 1_000_000
+            }
+        ]
+    }
+
+    # Agregarlo como primer bloque si aún no existe
+    latest = redis_utils.get_latest_element()
+    if latest is None:
+        redis_utils.post_message(genesis_block)
+        print("🧱 Bloque génesis creado con fondos para universal_account")
+    else:
+        print("🧱 Ya existe un bloque, génesis no necesario")
+
+# 💥 Crear bloque génesis si es necesario
+create_genesis_block()
 
 # Run the process_packages method in a separate thread
 import threading
@@ -245,4 +295,4 @@ process_packages_thread = threading.Thread(target=process_packages)
 process_packages_thread.start()
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080,debug=True)
+    app.run(host='0.0.0.0', port=8080, debug=True)
