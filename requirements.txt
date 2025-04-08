@@ -4,3 +4,4 @@ redis
 flask-cors
 pyjwt 
 requests
+python-dotenv

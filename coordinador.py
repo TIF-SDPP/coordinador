@@ -11,9 +11,13 @@ from flask_cors import CORS
 import requests
 import jwt  
 from functools import wraps
+from dotenv import load_dotenv
 
-AUTH0_DOMAIN ="blockchainsd.us.auth0.com"  
-API_AUDIENCE = "https://blockchainsd.us.auth0.com/api/v2/"
+load_dotenv()
+
+AUTH0_DOMAIN = os.getenv("AUTH0_DOMAIN")
+API_AUDIENCE = os.getenv("API_AUDIENCE")
+RABBITMQ_HOST = os.getenv("RABBITMQ_HOST")
 
 
 
@@ -86,7 +90,7 @@ def process_packages():
 def connect_rabbitmq():
     while True:
         try:
-            connection = pika.BlockingConnection(pika.ConnectionParameters(host='service-rabbitmq.default.svc.cluster.local', port=5672, credentials=pika.PlainCredentials('guest', 'guest')))
+            connection = pika.BlockingConnection(pika.ConnectionParameters(host=RABBITMQ_HOST, port=5672, credentials=pika.PlainCredentials('guest', 'guest')))
             return connection
         except pika.exceptions.AMQPConnectionError:
             print("Fallo en la conexión, reintentando en 5 segundos...")
