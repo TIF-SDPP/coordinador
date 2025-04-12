@@ -66,7 +66,7 @@ def process_packages():
                 last_element = redis_utils.get_latest_element()
 
              
-                max_random=99999999
+                max_random=sys.maxsize-1
                 block_id= str(random.randint(0, max_random))
                 
                 block = {
@@ -302,4 +302,4 @@ process_packages_thread = threading.Thread(target=process_packages)
 process_packages_thread.start()
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080, debug=True)
+    app.run(host='0.0.0.0', port=8080, debug=False)

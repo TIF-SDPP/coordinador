@@ -16,7 +16,7 @@ spec:
     spec:
       containers:
       - name: coordinador
-        image: leoduville5/coordinador:v5
+        image: leoduville5/coordinador:v7
         imagePullPolicy: Always
         resources:
           requests:
