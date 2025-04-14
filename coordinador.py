@@ -2,25 +2,31 @@ from flask import Flask, request, jsonify
 import pika
 import json
 import time
-import redis
 import random
-import hashlib
 import os
 import sys
 from flask_cors import CORS
 import requests
-import jwt  
 from functools import wraps
 from dotenv import load_dotenv
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePublicNumbers
+from cryptography.hazmat.backends import default_backend
+from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.serialization import load_pem_private_key
+from cryptography.hazmat.primitives import serialization
+import base64
+from redis_utils import RedisUtils
 
 load_dotenv()
 
 AUTH0_DOMAIN = os.getenv("AUTH0_DOMAIN")
 API_AUDIENCE = os.getenv("API_AUDIENCE")
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST")
-
-
-
+AUTH0_USERINFO_URL = os.getenv("AUTH0_USERINFO_URL")
 
 # Get the current script's directory
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -29,7 +35,6 @@ parent_dir = os.path.dirname(current_dir)
 
 print("Parent Directory:", parent_dir)
 sys.path.append(parent_dir)
-from redis_utils import RedisUtils
 redis_utils = RedisUtils()
 
 # Function to calculate the hash using the provided number and base string
@@ -98,15 +103,11 @@ def connect_rabbitmq():
 
 connection = connect_rabbitmq()
 
-
-
-
 channel = connection.channel()
 # Declare queues
 channel.queue_declare(queue='transactions')
 # Declare the topic exchange
 channel.exchange_declare(exchange='block_challenge', exchange_type='topic', durable=True)
-
 
 # --- APP side --- 
 app = Flask(__name__)
@@ -120,15 +121,62 @@ def check_status():
 # Method to handle incoming transactions (READY)
 @app.route('/transaction', methods=['POST'])
 def receive_transaction():
-    
     data = request.get_json()
-    print (f"transaction: {data} received ")
     user_from = data['user_from']
     user_to = data['user_to']
     amount = data['amount']
-    # Publish the message to the 'transactions' queue in RabbitMQ
+    signature = data['signature']
+    message = data['message']  # El mensaje original firmado
+
+    print(f"Transacción recibida: {data}")
+
+    # Recuperar clave pública del usuario
+    public_key_json = redis_utils.redis_client.get(f"public_key:{user_from}")
+    if not public_key_json:
+        return jsonify({"error": "Public key not found for user"}), 400
+    
+    public_key = json.loads(public_key_json)
+    print(public_key)
+
+    if not verify_signature(public_key, message, signature):
+        return jsonify({"error": "Invalid signature"}), 403
+
+    # Si la firma es válida, se encola
     channel.basic_publish(exchange='', routing_key='transactions', body=json.dumps(data))
     return 'Transaction received and queued in RabbitMQ\n'
+
+# Función para agregar relleno Base64
+def add_b64_padding(b64_string):
+    return b64_string + '=' * (-len(b64_string) % 4)
+
+def verify_signature(jwk, message, signature_b64):
+    try:
+        print(f"[DEBUG] JWK: {jwk}")
+        print(f"[DEBUG] Message: {message}")
+        print(f"[DEBUG] Signature (base64): {signature_b64}")
+
+        x = int.from_bytes(base64.urlsafe_b64decode(add_b64_padding(jwk['x'])), 'big')
+        y = int.from_bytes(base64.urlsafe_b64decode(add_b64_padding(jwk['y'])), 'big')
+        public_numbers = EllipticCurvePublicNumbers(x, y, ec.SECP256R1())
+        public_key = public_numbers.public_key(default_backend())
+
+        encoded_message = message.encode('utf-8')
+        print(f"[DEBUG] Mensaje codificado (bytes): {encoded_message}")
+
+        signature_bytes = base64.urlsafe_b64decode(add_b64_padding(signature_b64))
+        print(f"[DEBUG] Signature (raw): {signature_bytes.hex()}")
+
+        # Convertir raw firma a DER
+        r = int.from_bytes(signature_bytes[:32], 'big')
+        s = int.from_bytes(signature_bytes[32:], 'big')
+        der_signature = encode_dss_signature(r, s)
+
+        public_key.verify(der_signature, encoded_message, ec.ECDSA(hashes.SHA256()))
+        print("[DEBUG] Firma válida ✅")
+        return True
+    except Exception as e:
+        print(f"[ERROR] Verificación fallida: {e}")
+        return False
 
 @app.route('/balance/<user_id>', methods=['GET'])
 def get_balance(user_id):
@@ -149,13 +197,11 @@ def get_balance(user_id):
 
     return jsonify({'balance': balance})
 
-
-
 @app.route('/solved_task', methods=['POST'])
 def receive_solved_task():
     data = request.get_json()
 
-    # Calculate the hash using the provided number and base string
+    # Calcular el hash usando el número y la cadena base proporcionados
     combined_data = f"{data['number']}{data['base_string_chain']}{data['blockchain_content']}"
     calculated_hash = format(enhanced_hash(combined_data), '08x')
     timestamp = time.time()
@@ -166,28 +212,25 @@ def receive_solved_task():
     if data['hash'] == calculated_hash:
         print("Data is valid")
         print("--------------------------------")
-        #Check if block_id exists in the database
+        # Verificar si el bloque ya existe en la base de datos
         if redis_utils.exists_id(data['id']):
-            print ("block exists")
+            print("Block exists")
             return jsonify({'message': 'Block already solved by another node. Discarding...'}), 200
         else:
-            # if data['user_id'] != '':
-            #     cargar platita  
-            print ("block does not exists, it's time to add to the network")
-            print (f"item hash: {data['hash']}" )
-            print (f"old blockchain content: {data['blockchain_content']}" )
+            print("Block does not exist, adding to the network")
             blockchain_data = f"{data['base_string_chain']}{data['hash']}"
             blockchain_content = format(enhanced_hash(blockchain_data), '08x')
-            print (f"blockchain content: {blockchain_content}" )
-            
-            # Get the hash of the latest block stored in the database
+            print(f"Blockchain content: {blockchain_content}")
+
+            # Obtener el hash del último bloque almacenado en la base de datos
             try:
                 previous_block = redis_utils.get_latest_element()
             except:
                 previous_block = 'Null'
+
             if previous_block != None:
                 print("--------------------------------")
-                print(f"Previous block hash: {previous_block["hash"]}")
+                print(f"Previous block hash: {previous_block['hash']}")
                 data['previous_block'] = previous_block["hash"]
                 print("--------------------------------")
             else:
@@ -195,51 +238,63 @@ def receive_solved_task():
                 print(f"Previous block hash: NULL ")
                 print("--------------------------------")
                 data['previous_block'] = "None"
-            # Add timestamp and previous_block hash to the data
+
+            # Añadir timestamp y el hash del bloque anterior a los datos
             data['timestamp'] = timestamp
             data['blockchain_content'] = blockchain_content
-                
-            print("------final-block-------")
-            print (data)
-            print("------final-block-------")
-            
+
+            print("------ Final Block -------")
+            print(data)
+            print("------ Final Block -------")
+
+            # Guardar el bloque en Redis
             redis_utils.post_message(message=data)
 
-            # If a user, give a gift
-
+            # Si es un usuario, enviar la recompensa
             is_user = data.get("worker_user") == "true"  # Convertir a booleano
 
             if is_user:
                 try:
-                    print("data is user")
-                    print(len(data.get('prefix')))
+                    print("Data is user")
                     user_id = data.get('user_id')
                     difficulty = len(data.get('prefix'))
-                    reward_amount = 10 * difficulty # Aca hay que ver si es algo fijo o depende de algun parámetro
+                    reward_amount = 10 * difficulty  # La recompensa puede depender de la dificultad
+                    message = f"Recompensa de {reward_amount} tokens para {user_id} por encontrar bloque"
 
                     if user_id:
+                        # Cargar la clave privada de universal_account
+                        private_key = load_private_key()
+
+                        # Firmar la transacción con la clave privada
                         reward_tx = {
                             "user_from": "universal_account",
                             "user_to": user_id,
-                            "amount": reward_amount
+                            "amount": reward_amount,
+                            "message": message
                         }
 
-                        # Enviamos esta transacción al endpoint /transaction (misma app)
-                        requests.post("http://localhost:8080/transaction", json=reward_tx)
+                        # Firmar la transacción antes de enviarla
+                        signature = sign_message(private_key, message)  # Función para firmar el mensaje con la clave privada
+                        reward_tx['signature'] = signature  # Incluir la firma en la transacción
 
-                        print(f"Recompensa enviada a {user_id}: {reward_amount} tokens")
+                        # Enviar esta transacción al endpoint /transaction
+                        response = requests.post("http://localhost:8080/transaction", json=reward_tx)
+
+                        if response.status_code == 200:
+                            print(f"Recompensa enviada a {user_id}: {reward_amount} tokens")
+                        else:
+                            print(f"Error al enviar recompensa: {response.text}")
+
                     else:
                         print("No se encontró user_id para recompensa")
 
                 except Exception as e:
                     print(f"Error al enviar recompensa: {str(e)}")
 
-
         return jsonify({'message': 'Block validated and added to the blockchain.'}), 201
-          
     else:
         return jsonify({'message': 'Invalid hash. Discarding the package.'}), 400
-
+    
 @app.route('/metrics', methods=['GET'])
 def get_metrics():
     workers = {
@@ -269,6 +324,41 @@ def get_metrics():
 
     return jsonify({'data': workers}), 200
 
+def is_token_valid(token):
+    try:
+        response = requests.get(
+            AUTH0_USERINFO_URL,
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        return response.status_code == 200
+    except Exception as e:
+        print(f"Error validating token: {e}")
+        return False
+
+@app.route('/register_key', methods=['POST'])
+def register_key():
+    data = request.get_json()
+    auth_header = request.headers.get("Authorization")
+    user_id = data.get("user_id")
+    public_key = data.get("public_key")
+
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return jsonify({"error": "Missing or malformed Authorization header"}), 401
+    
+    token = auth_header.replace("Bearer ", "")
+
+    if not is_token_valid(token):
+        return jsonify({"error": "Invalid or expired token"}), 401
+
+    if not user_id or not public_key:
+        return jsonify({"error": "Missing user_id or public_key"}), 400
+
+    redis_key = f"public_key:{user_id}"
+    redis_utils.redis_client.set(redis_key, json.dumps(public_key))
+
+    return jsonify({"message": "Public key registered successfully"}), 200
+
+
 def create_genesis_block():
     genesis_block = {
         "id": "genesis_block",
@@ -293,8 +383,79 @@ def create_genesis_block():
     else:
         print("🧱 Ya existe un bloque, génesis no necesario")
 
+# Cargar la clave privada de universal_account desde un archivo .pem
+def load_private_key():
+    private_key_path = "universal_account_private_key.pem"  # Asegúrate de usar la ruta correcta
+    with open(private_key_path, "rb") as f:
+        private_key_data = f.read()
+    private_key = load_pem_private_key(private_key_data, password=None)
+    return private_key
+
+def sign_message(private_key, message):
+    # Firmar el mensaje con la clave privada (esto genera una firma DER)
+    signature_der = private_key.sign(
+        message.encode('utf-8'),
+        ec.ECDSA(hashes.SHA256())
+    )
+
+    # Decodificar firma DER a r|s raw
+    r, s = decode_dss_signature(signature_der)
+    signature_raw = r.to_bytes(32, byteorder='big') + s.to_bytes(32, byteorder='big')
+
+    # Codificar la firma raw a base64 url-safe sin padding
+    signature_b64 = base64.urlsafe_b64encode(signature_raw).decode('utf-8').rstrip("=")
+    return signature_b64
+
+def register_universal_account_key():
+    redis_key = "public_key:universal_account"
+
+    # Si ya existe la clave, no hacemos nada
+    if redis_utils.redis_client.get(redis_key):
+        print("🔑 Clave pública de universal_account ya registrada")
+        #return
+
+    # Generar par de claves
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    public_key = private_key.public_key()
+    public_numbers = public_key.public_numbers()
+
+    # Codificar x e y en Base64 URL-safe sin padding
+    x = base64.urlsafe_b64encode(public_numbers.x.to_bytes(32, 'big')).decode('utf-8').rstrip("=")
+    y = base64.urlsafe_b64encode(public_numbers.y.to_bytes(32, 'big')).decode('utf-8').rstrip("=")
+
+    jwk = {
+        "kty": "EC",
+        "crv": "P-256",
+        "x": x,
+        "y": y,
+        "ext": True,
+        "key_ops": ["verify"]
+    }
+
+    # Guardar clave pública en Redis
+    redis_utils.redis_client.set(redis_key, json.dumps(jwk))
+    print("🔐 Clave pública de universal_account registrada en Redis")
+
+    # Guardar la clave privada en un archivo .pem
+    private_key_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption()
+    )
+
+    # Especifica la ruta del archivo .pem donde se almacenará la clave privada
+    pem_file_path = "universal_account_private_key.pem"
+
+    with open(pem_file_path, "wb") as pem_file:
+        pem_file.write(private_key_pem)
+
+    print(f"Clave privada guardada en {pem_file_path}")
+
 # 💥 Crear bloque génesis si es necesario
 create_genesis_block()
+
+# 💥 Generar claves del usuario génesis si es necesario
+register_universal_account_key()
 
 # Run the process_packages method in a separate thread
 import threading
