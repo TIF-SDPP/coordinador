@@ -309,7 +309,9 @@ def get_metrics():
         try:
             block_data = json.loads(block)
             worker_type = block_data.get("worker_type")
-            timestamp = block_data.get("timestamp", 0)
+            timestamp = block_data.get("processing_time", 0)
+            print("metric")
+            print(block_data)
 
             if worker_type in workers:
                 workers[worker_type]["cant"] += 1
