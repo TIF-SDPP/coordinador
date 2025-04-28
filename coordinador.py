@@ -143,7 +143,7 @@ def receive_transaction():
 
     # Si la firma es válida, se encola
     channel.basic_publish(exchange='', routing_key='transactions', body=json.dumps(data))
-    return 'Transaction received and queued in RabbitMQ\n'
+    return jsonify({"message": "Transaction received and queued in RabbitMQ"}), 200
 
 # Función para agregar relleno Base64
 def add_b64_padding(b64_string):
@@ -196,6 +196,14 @@ def get_balance(user_id):
                 balance -= amount
 
     return jsonify({'balance': balance})
+
+@app.route('/key_exists/<user_id>', methods=['GET'])
+def check_key_exists(user_id):
+    # Verificar si la clave pública existe en Redis
+    public_key_json = redis_utils.redis_client.get(f"public_key:{user_id}")
+    
+    # Responder con un JSON indicando si existe o no
+    return jsonify({'exists': bool(public_key_json)}), 200
 
 @app.route('/solved_task', methods=['POST'])
 def receive_solved_task():
