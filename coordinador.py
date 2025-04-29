@@ -52,46 +52,48 @@ def enhanced_hash(data):
 def process_packages():            
         # Process messages in chunks of 5
         while True:
-            package = []
-            for _ in range(20):
-                method_frame, header_frame, body = channel.basic_get(queue='transactions', auto_ack=False)
-                if method_frame:
-                    # Add the message to the package
-                    package.append(json.loads(body))
-                    # Acknowledge the message
-                    channel.basic_ack(delivery_tag=method_frame.delivery_tag)
-                else:
-                    break  # No more messages available
+            try:
+                package = []
+                for _ in range(20):
+                    method_frame, header_frame, body = channel.basic_get(queue='transactions', auto_ack=False)
+                    if method_frame:
+                        # Add the message to the package
+                        package.append(json.loads(body))
+                        # Acknowledge the message
+                        channel.basic_ack(delivery_tag=method_frame.delivery_tag)
+                    else:
+                        break  # No more messages available
 
-            if package:
-                # Add metadata to the block package
-                tail_elements = redis_utils.get_recent_messages()
+                if package:
+                    # Add metadata to the block package
+                    tail_elements = redis_utils.get_recent_messages()
+                    
                 
-            
-                last_element = redis_utils.get_latest_element()
+                    last_element = redis_utils.get_latest_element()
 
-             
-                max_random=sys.maxsize-1
-                block_id= str(random.randint(0, max_random))
                 
-                block = {
-                    "id": block_id,
-                    "transactions": package,
-                    "prefix": "0000",  # Placeholder for difficulty
-                    "base_string_chain": "A4FC",  # hexa for the goal
-                    "blockchain_content": last_element["blockchain_content"] if last_element else "[]",  # the blockchain inmutability
-                    "random_num_max": max_random
-                }
-                # Publish the package to" the 'blocks' topic exchange in RabbitMQ
-                channel.basic_publish(exchange='block_challenge', routing_key='blocks', body=json.dumps(block))
-                print(f"Package with block ID {block_id} sent to the 'blocks' topic exchange")
-                  # Increment block ID for the next package
-            
-            time.sleep(60)        
-
+                    max_random=sys.maxsize-1
+                    block_id= str(random.randint(0, max_random))
+                    
+                    block = {
+                        "id": block_id,
+                        "transactions": package,
+                        "prefix": "0000",  # Placeholder for difficulty
+                        "base_string_chain": "A4FC",  # hexa for the goal
+                        "blockchain_content": last_element["blockchain_content"] if last_element else "[]",  # the blockchain inmutability
+                        "random_num_max": max_random
+                    }
+                    # Publish the package to" the 'blocks' topic exchange in RabbitMQ
+                    channel.basic_publish(exchange='block_challenge', routing_key='blocks', body=json.dumps(block))
+                    print(f"Package with block ID {block_id} sent to the 'blocks' topic exchange")
+                    # Increment block ID for the next package
+                
+                time.sleep(60)
+            except Exception as e:
+                print(f"[ERROR] process_packages: {e}")
+                time.sleep(5)  # pequeña espera antes de seguir  
 
 # Connect to RabbitMQ server
-
 def connect_rabbitmq():
     while True:
         try:
@@ -123,12 +125,14 @@ def check_status():
 def receive_transaction():
     data = request.get_json()
     user_from = data['user_from']
-    user_to = data['user_to']
-    amount = data['amount']
     signature = data['signature']
     message = data['message']  # El mensaje original firmado
 
     print(f"Transacción recibida: {data}")
+
+    required_fields = ["user_from", "user_to", "amount", "signature", "message"]
+    if not all(field in data for field in required_fields):
+        return jsonify({"error": "Missing fields in transaction"}), 400
 
     # Recuperar clave pública del usuario
     public_key_json = redis_utils.redis_client.get(f"public_key:{user_from}")
