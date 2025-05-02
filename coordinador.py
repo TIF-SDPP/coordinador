@@ -265,7 +265,9 @@ def receive_solved_task():
             # Si es un usuario, enviar la recompensa
             is_user = data.get("worker_user") == "true"  # Convertir a booleano
 
-            if is_user:
+            is_reward_block = any(tx.get("reward", False) for tx in data.get("transactions", []))
+
+            if is_user and not is_reward_block:
                 try:
                     print("Data is user")
                     user_id = data.get('user_id')
@@ -282,7 +284,8 @@ def receive_solved_task():
                             "user_from": "universal_account",
                             "user_to": user_id,
                             "amount": reward_amount,
-                            "message": message
+                            "message": message,
+                            "reward": True  # <--- Marca especial para evitar loops
                         }
 
                         # Firmar la transacción antes de enviarla
