@@ -81,7 +81,7 @@ def process_packages():
                         "prefix": "0000",  # Placeholder for difficulty
                         "base_string_chain": "A4FC",  # hexa for the goal
                         "blockchain_content": last_element["blockchain_content"] if last_element else "[]",  # the blockchain inmutability
-                        "random_num_max": max_random
+                        "random_num_max": max_random,
                     }
                     # Publish the package to" the 'blocks' topic exchange in RabbitMQ
                     channel.basic_publish(exchange='block_challenge', routing_key='blocks', body=json.dumps(block))
@@ -127,6 +127,10 @@ def receive_transaction():
     user_from = data['user_from']
     signature = data['signature']
     message = data['message']  # El mensaje original firmado
+
+    if user_from == 'universal_acount':
+        return jsonify({"error": "universal_account cannot be the user_from"}), 400
+
 
     print(f"Transacción recibida: {data}")
 
@@ -190,16 +194,29 @@ def get_balance(user_id):
 
     for block in blocks:
         block_data = json.loads(block)
-
-        for transaction in block_data.get('transactions', []):
-            amount = float(transaction['amount'])
-
-            if transaction['user_to'] == user_id:
-                balance += amount
-            if transaction['user_from'] == user_id:
-                balance -= amount
+        recompensa = block_data.get('tx_recompensa')        
+        if recompensa and recompensa.get('user_to') == user_id:
+            balance += float(recompensa.get('amount', 0))
 
     return jsonify({'balance': balance})
+
+
+def balance_universal():
+    balance = 1_000_000
+
+    blocks = redis_utils.redis_client.lrange('blockchain', 0, -1)
+
+    for block in blocks:
+        block_data = json.loads(block)
+
+        recompensa = block_data.get('tx_recompensa')
+
+        if recompensa is not None:
+            balance -= float(recompensa.get('amount', 0))
+
+    print(f'balance {balance}')
+    return balance
+
 
 @app.route('/key_exists/<user_id>', methods=['GET'])
 def check_key_exists(user_id):
@@ -208,6 +225,7 @@ def check_key_exists(user_id):
     
     # Responder con un JSON indicando si existe o no
     return jsonify({'exists': bool(public_key_json)}), 200
+
 
 @app.route('/solved_task', methods=['POST'])
 def receive_solved_task():
@@ -220,6 +238,7 @@ def receive_solved_task():
     print("--------------------------------")
     print(f"Received hash: {data['hash']}")
     print(f"Locally calculated hash: {calculated_hash}")
+
 
     if data['hash'] == calculated_hash:
         print("Data is valid")
@@ -254,13 +273,10 @@ def receive_solved_task():
             # Añadir timestamp y el hash del bloque anterior a los datos
             data['timestamp'] = timestamp
             data['blockchain_content'] = blockchain_content
+            data['tx_recompensa'] = {'nonce': data['number'],"user_to":"", 'from':"", 'amount':0}
 
-            print("------ Final Block -------")
-            print(data)
-            print("------ Final Block -------")
 
-            # Guardar el bloque en Redis
-            redis_utils.post_message(message=data)
+           
 
             # Si es un usuario, enviar la recompensa
             is_user = data.get("worker_user") == "true"  # Convertir a booleano
@@ -276,29 +292,13 @@ def receive_solved_task():
                     message = f"Recompensa de {reward_amount} tokens para {user_id} por encontrar bloque"
 
                     if user_id:
-                        # Cargar la clave privada de universal_account
-                        private_key = load_private_key()
-
-                        # Firmar la transacción con la clave privada
-                        reward_tx = {
-                            "user_from": "universal_account",
-                            "user_to": user_id,
-                            "amount": reward_amount,
-                            "message": message,
-                            "reward": True  # <--- Marca especial para evitar loops
-                        }
-
-                        # Firmar la transacción antes de enviarla
-                        signature = sign_message(private_key, message)  # Función para firmar el mensaje con la clave privada
-                        reward_tx['signature'] = signature  # Incluir la firma en la transacción
-
-                        # Enviar esta transacción al endpoint /transaction
-                        response = requests.post("http://localhost:8080/transaction", json=reward_tx)
-
-                        if response.status_code == 200:
-                            print(f"Recompensa enviada a {user_id}: {reward_amount} tokens")
-                        else:
-                            print(f"Error al enviar recompensa: {response.text}")
+                        balance = balance_universal()
+                        print(f'universal_acount {balance}')
+                        if balance <= 0:
+                              return jsonify({'message': 'Nos fundimos :('}), 400
+                        data['tx_recompensa']['from'] = "universal_acount"
+                        data['tx_recompensa']['user_to'] = user_id
+                        data['tx_recompensa']['amount'] = reward_amount
 
                     else:
                         print("No se encontró user_id para recompensa")
@@ -306,10 +306,18 @@ def receive_solved_task():
                 except Exception as e:
                     print(f"Error al enviar recompensa: {str(e)}")
 
+            print("------ Final Block -------")
+            print(data)
+            print("------ Final Block -------")
+
+             # Guardar el bloque en Redis
+
+            redis_utils.post_message(message=data)
+
         return jsonify({'message': 'Block validated and added to the blockchain.'}), 201
     else:
         return jsonify({'message': 'Invalid hash. Discarding the package.'}), 400
-    
+
 @app.route('/metrics', methods=['GET'])
 def get_metrics():
     workers = {
@@ -340,6 +348,10 @@ def get_metrics():
                 data["processing_time"] = data["processing_time"] / data["cant"]
 
     return jsonify({'data': workers}), 200
+
+# @app.route("/timeout_task", methods = ['POST'])
+# def post_timeout():
+#     print("timeout")
 
 def is_token_valid(token):
     try:
