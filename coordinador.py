@@ -33,6 +33,11 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 # Get the parent directory
 parent_dir = os.path.dirname(current_dir)
 
+# Valores de umbral para resolver rápido y lento
+threshold_fast = 50.0  # Tiempo en segundos para considerar que el worker resuelve rápido
+threshold_slow = 100.0  # Tiempo en segundos para considerar que el worker resuelve lento
+prefix = "00000"
+
 print("Parent Directory:", parent_dir)
 sys.path.append(parent_dir)
 redis_utils = RedisUtils()
@@ -78,7 +83,7 @@ def process_packages():
                     block = {
                         "id": block_id,
                         "transactions": package,
-                        "prefix": "0000",  # Placeholder for difficulty
+                        "prefix": prefix,  # Placeholder for difficulty
                         "base_string_chain": "A4FC",  # hexa for the goal
                         "blockchain_content": last_element["blockchain_content"] if last_element else "[]",  # the blockchain inmutability
                         "random_num_max": max_random,
@@ -130,7 +135,6 @@ def receive_transaction():
 
     if user_from == 'universal_acount':
         return jsonify({"error": "universal_account cannot be the user_from"}), 400
-
 
     print(f"Transacción recibida: {data}")
 
@@ -200,7 +204,6 @@ def get_balance(user_id):
 
     return jsonify({'balance': balance})
 
-
 def balance_universal():
     balance = 1_000_000
 
@@ -217,7 +220,6 @@ def balance_universal():
     print(f'balance {balance}')
     return balance
 
-
 @app.route('/key_exists/<user_id>', methods=['GET'])
 def check_key_exists(user_id):
     # Verificar si la clave pública existe en Redis
@@ -226,6 +228,34 @@ def check_key_exists(user_id):
     # Responder con un JSON indicando si existe o no
     return jsonify({'exists': bool(public_key_json)}), 200
 
+# Notificación al Pool Manager para ajustar la dificultad (prefijo)
+def ajustar_prefijo_coordinador(tiempo_resolucion):
+    """
+    Función que ajusta la dificultad en el Pool Manager en función del tiempo de resolución.
+    Si la resolución es rápida, incrementa el prefijo, si es lenta, lo disminuye.
+    """
+    if tiempo_resolucion < threshold_fast:  # Si se resolvió rápidamente
+        # Notificar al Pool Manager para aumentar el prefijo
+        print("Resolución rápida, aumentando dificultad (prefijo).")
+        aumentar_prefijo()
+    elif tiempo_resolucion > threshold_slow:  # Si se resolvió lentamente
+        # Notificar al Pool Manager para disminuir el prefijo
+        print("Resolución lenta, disminuyendo dificultad (prefijo).")
+        disminuir_prefijo()
+    else:
+        # Si está dentro de los tiempos aceptables, mantener la dificultad
+        print("Resolución en tiempo normal, manteniendo dificultad (prefijo).")
+
+def aumentar_prefijo():
+    global prefix
+    prefix = "0" + prefix  # Añadir más ceros al prefijo
+    print(f"Nuevo prefijo aumentado: {prefix}")
+
+def disminuir_prefijo():
+    global prefix
+    if len(prefix) > 1:
+        prefix = prefix[1:]  # Eliminar un cero del prefijo
+    print(f"Nuevo prefijo disminuido: {prefix}")
 
 @app.route('/solved_task', methods=['POST'])
 def receive_solved_task():
@@ -235,6 +265,11 @@ def receive_solved_task():
     combined_data = f"{data['number']}{data['base_string_chain']}{data['blockchain_content']}"
     calculated_hash = format(enhanced_hash(combined_data), '08x')
     timestamp = time.time()
+
+    # Tiempo de resolución
+    tiempo_resolucion = data.get("processing_time")
+    print(f"Tiempo de resolución del worker: {tiempo_resolucion} segundos")
+
     print("--------------------------------")
     print(f"Received hash: {data['hash']}")
     print(f"Locally calculated hash: {calculated_hash}")
@@ -243,12 +278,17 @@ def receive_solved_task():
     if data['hash'] == calculated_hash:
         print("Data is valid")
         print("--------------------------------")
+
         # Verificar si el bloque ya existe en la base de datos
         if redis_utils.exists_id(data['id']):
             print("Block exists")
             return jsonify({'message': 'Block already solved by another node. Discarding...'}), 200
         else:
             print("Block does not exist, adding to the network")
+
+            # Notificar al Pool Manager para ajustar el prefijo basado en el tiempo de resolución
+            ajustar_prefijo_coordinador(tiempo_resolucion)
+
             blockchain_data = f"{data['base_string_chain']}{data['hash']}"
             blockchain_content = format(enhanced_hash(blockchain_data), '08x')
             print(f"Blockchain content: {blockchain_content}")
@@ -348,10 +388,6 @@ def get_metrics():
                 data["processing_time"] = data["processing_time"] / data["cant"]
 
     return jsonify({'data': workers}), 200
-
-# @app.route("/timeout_task", methods = ['POST'])
-# def post_timeout():
-#     print("timeout")
 
 def is_token_valid(token):
     try:
