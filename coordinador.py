@@ -36,7 +36,7 @@ parent_dir = os.path.dirname(current_dir)
 # Valores de umbral para resolver rápido y lento
 threshold_fast = 50.0  # Tiempo en segundos para considerar que el worker resuelve rápido
 threshold_slow = 100.0  # Tiempo en segundos para considerar que el worker resuelve lento
-prefix = "00000"
+#prefix = "00000"
 
 print("Parent Directory:", parent_dir)
 sys.path.append(parent_dir)
@@ -79,7 +79,8 @@ def process_packages():
                 
                     max_random=sys.maxsize-1
                     block_id= str(random.randint(0, max_random))
-                    
+                    prefix = get_prefix_from_redis()  # Obtener el prefijo actual desde Redis
+
                     block = {
                         "id": block_id,
                         "transactions": package,
@@ -119,6 +120,14 @@ channel.exchange_declare(exchange='block_challenge', exchange_type='topic', dura
 # --- APP side --- 
 app = Flask(__name__)
 CORS(app)
+
+def inicializar_prefijo():
+    if redis_utils.redis_client.get('prefix_key') is None:
+        redis_utils.redis_client.set('prefix_key', '00000')  # Valor inicial por defecto
+        print("Prefijo inicial insertado en Redis: 00000")
+    else:
+        print("Prefijo ya presente en Redis:", get_prefix_from_redis())
+
 
 # Endpoint to check the status of the application
 @app.route('/status', methods=['GET'])
@@ -220,6 +229,12 @@ def balance_universal():
     print(f'balance {balance}')
     return balance
 
+def get_prefix_from_redis():
+    prefix = redis_utils.redis_client.get('prefix_key')
+    if prefix is None:
+        return "00000"  # Valor por defecto si no existe
+    return prefix.decode('utf-8')
+
 @app.route('/key_exists/<user_id>', methods=['GET'])
 def check_key_exists(user_id):
     # Verificar si la clave pública existe en Redis
@@ -247,14 +262,16 @@ def ajustar_prefijo_coordinador(tiempo_resolucion):
         print("Resolución en tiempo normal, manteniendo dificultad (prefijo).")
 
 def aumentar_prefijo():
-    global prefix
+    prefix = get_prefix_from_redis()  # Obtener el prefijo actual desde Redis
     prefix = "0" + prefix  # Añadir más ceros al prefijo
+    redis_utils.redis_client.set('prefix_key', prefix)  # Actualizar el prefijo en Redis
     print(f"Nuevo prefijo aumentado: {prefix}")
 
 def disminuir_prefijo():
-    global prefix
+    prefix = get_prefix_from_redis()  # Obtener el prefijo actual desde Redis
     if len(prefix) > 1:
         prefix = prefix[1:]  # Eliminar un cero del prefijo
+        redis_utils.redis_client.set('prefix_key', prefix)  # Actualizar el prefijo en Redis
     print(f"Nuevo prefijo disminuido: {prefix}")
 
 @app.route('/solved_task', methods=['POST'])
@@ -286,7 +303,7 @@ def receive_solved_task():
         else:
             print("Block does not exist, adding to the network")
 
-            # Notificar al Pool Manager para ajustar el prefijo basado en el tiempo de resolución
+            # Ajustar el prefijo basado en el tiempo de resolución
             ajustar_prefijo_coordinador(tiempo_resolucion)
 
             blockchain_data = f"{data['base_string_chain']}{data['hash']}"
@@ -356,7 +373,11 @@ def receive_solved_task():
 
         return jsonify({'message': 'Block validated and added to the blockchain.'}), 201
     else:
-        return jsonify({'message': 'Invalid hash. Discarding the package.'}), 400
+        if data['hash'] == '':
+            disminuir_prefijo()
+            return jsonify({'message': 'Ok, it was very difficult. Reducing the difficult...'}), 201
+        else:
+            return jsonify({'message': 'Invalid hash. Discarding the package.'}), 400
 
 @app.route('/metrics', methods=['GET'])
 def get_metrics():
@@ -477,7 +498,7 @@ def register_universal_account_key():
     # Si ya existe la clave, no hacemos nada
     if redis_utils.redis_client.get(redis_key):
         print("🔑 Clave pública de universal_account ya registrada")
-        #return
+        return
 
     # Generar par de claves
     private_key = ec.generate_private_key(ec.SECP256R1())
@@ -516,16 +537,17 @@ def register_universal_account_key():
 
     print(f"Clave privada guardada en {pem_file_path}")
 
-# 💥 Crear bloque génesis si es necesario
-create_genesis_block()
-
-# 💥 Generar claves del usuario génesis si es necesario
-register_universal_account_key()
-
 # Run the process_packages method in a separate thread
 import threading
 process_packages_thread = threading.Thread(target=process_packages)
 process_packages_thread.start()
 
 if __name__ == '__main__':
+    # 💥 Crear bloque génesis si es necesario
+    create_genesis_block()
+
+    # 💥 Generar claves del usuario génesis si es necesario
+    register_universal_account_key()
+
+    inicializar_prefijo()
     app.run(host='0.0.0.0', port=8080, debug=False)
