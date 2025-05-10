@@ -36,7 +36,6 @@ parent_dir = os.path.dirname(current_dir)
 # Valores de umbral para resolver rápido y lento
 threshold_fast = 50.0  # Tiempo en segundos para considerar que el worker resuelve rápido
 threshold_slow = 100.0  # Tiempo en segundos para considerar que el worker resuelve lento
-#prefix = "00000"
 
 print("Parent Directory:", parent_dir)
 sys.path.append(parent_dir)
@@ -123,11 +122,10 @@ CORS(app)
 
 def inicializar_prefijo():
     if redis_utils.redis_client.get('prefix_key') is None:
-        redis_utils.redis_client.set('prefix_key', '00000')  # Valor inicial por defecto
-        print("Prefijo inicial insertado en Redis: 00000")
+        redis_utils.redis_client.set('prefix_key', '0000')  # Valor inicial por defecto
+        print("Prefijo inicial insertado en Redis: 0000")
     else:
         print("Prefijo ya presente en Redis:", get_prefix_from_redis())
-
 
 # Endpoint to check the status of the application
 @app.route('/status', methods=['GET'])
@@ -162,9 +160,19 @@ def receive_transaction():
     if not verify_signature(public_key, message, signature):
         return jsonify({"error": "Invalid signature"}), 403
 
-    # Si la firma es válida, se encola
-    channel.basic_publish(exchange='', routing_key='transactions', body=json.dumps(data))
+    if channel.is_open:
+        channel.basic_publish(exchange='', routing_key='transactions', body=json.dumps(data))
+    else:
+        # reconectar o loggear el error
+        reconnect()
+        
     return jsonify({"message": "Transaction received and queued in RabbitMQ"}), 200
+
+def reconnect():
+    global connection, channel
+    connection = pika.BlockingConnection(pika.ConnectionParameters('rabbitmq'))
+    channel = connection.channel()
+    channel.queue_declare(queue='transactions')
 
 # Función para agregar relleno Base64
 def add_b64_padding(b64_string):
@@ -246,7 +254,7 @@ def check_key_exists(user_id):
 # Notificación al Pool Manager para ajustar la dificultad (prefijo)
 def ajustar_prefijo_coordinador(tiempo_resolucion):
     """
-    Función que ajusta la dificultad en el Pool Manager en función del tiempo de resolución.
+    Función que ajusta la dificultad en el Coordinador en función del tiempo de resolución.
     Si la resolución es rápida, incrementa el prefijo, si es lenta, lo disminuye.
     """
     if tiempo_resolucion < threshold_fast:  # Si se resolvió rápidamente
@@ -278,6 +286,13 @@ def disminuir_prefijo():
 def receive_solved_task():
     data = request.get_json()
 
+    if data['timeout']:
+        if not redis_utils.exists_id(data['id']):
+            disminuir_prefijo()
+            return jsonify({'message': 'Ok, it was very difficult. Reducing the difficult...'}), 201
+        else:
+            return jsonify({'message': 'Discarding the package.'}), 201
+
     # Calcular el hash usando el número y la cadena base proporcionados
     combined_data = f"{data['number']}{data['base_string_chain']}{data['blockchain_content']}"
     calculated_hash = format(enhanced_hash(combined_data), '08x')
@@ -290,7 +305,6 @@ def receive_solved_task():
     print("--------------------------------")
     print(f"Received hash: {data['hash']}")
     print(f"Locally calculated hash: {calculated_hash}")
-
 
     if data['hash'] == calculated_hash:
         print("Data is valid")
@@ -332,9 +346,6 @@ def receive_solved_task():
             data['blockchain_content'] = blockchain_content
             data['tx_recompensa'] = {'nonce': data['number'],"user_to":"", 'from':"", 'amount':0}
 
-
-           
-
             # Si es un usuario, enviar la recompensa
             is_user = data.get("worker_user") == "true"  # Convertir a booleano
 
@@ -373,11 +384,7 @@ def receive_solved_task():
 
         return jsonify({'message': 'Block validated and added to the blockchain.'}), 201
     else:
-        if data['hash'] == '':
-            disminuir_prefijo()
-            return jsonify({'message': 'Ok, it was very difficult. Reducing the difficult...'}), 201
-        else:
-            return jsonify({'message': 'Invalid hash. Discarding the package.'}), 400
+        return jsonify({'message': 'Invalid hash. Discarding the package.'}), 400
 
 @app.route('/metrics', methods=['GET'])
 def get_metrics():
