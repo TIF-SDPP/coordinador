@@ -27,6 +27,9 @@ AUTH0_DOMAIN = os.getenv("AUTH0_DOMAIN")
 API_AUDIENCE = os.getenv("API_AUDIENCE")
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST")
 AUTH0_USERINFO_URL = os.getenv("AUTH0_USERINFO_URL")
+RABBITMQ_USER = os.getenv("RABBITMQ_USER")
+RABBITMQ_PASS = os.getenv("RABBITMQ_PASS")
+RABBITMQ_PORT = os.getenv("RABBITMQ_PORT")
 
 # Get the current script's directory
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -102,7 +105,7 @@ def process_packages():
 def connect_rabbitmq():
     while True:
         try:
-            connection = pika.BlockingConnection(pika.ConnectionParameters(host=RABBITMQ_HOST, port=5672, credentials=pika.PlainCredentials('guest', 'guest')))
+            connection = pika.BlockingConnection(pika.ConnectionParameters(host=RABBITMQ_HOST, port=RABBITMQ_PORT, credentials=pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASS)))
             return connection
         except pika.exceptions.AMQPConnectionError:
             print("Fallo en la conexión, reintentando en 5 segundos...")
@@ -136,18 +139,23 @@ def check_status():
 @app.route('/transaction', methods=['POST'])
 def receive_transaction():
     data = request.get_json()
-    user_from = data['user_from']
-    signature = data['signature']
-    message = data['message']  # El mensaje original firmado
-
-    if user_from == 'universal_acount':
-        return jsonify({"error": "universal_account cannot be the user_from"}), 400
 
     print(f"Transacción recibida: {data}")
 
-    required_fields = ["user_from", "user_to", "amount", "signature", "message"]
-    if not all(field in data for field in required_fields):
+    if "transaction" not in data or "signature" not in data:
+        return jsonify({"error": "Missing fields transaction or fields signature"}), 400
+
+    transaction = data["transaction"]
+    signature = data["signature"]
+    
+    required_fields = ["user_from", "user_to", "amount"]
+    if not all(field in transaction for field in required_fields):
         return jsonify({"error": "Missing fields in transaction"}), 400
+
+    user_from = transaction["user_from"]
+
+    if user_from == 'universal_acount':
+        return jsonify({"error": "universal_account cannot be the user_from"}), 400
 
     # Recuperar clave pública del usuario
     public_key_json = redis_utils.redis_client.get(f"public_key:{user_from}")
@@ -157,29 +165,42 @@ def receive_transaction():
     public_key = json.loads(public_key_json)
     print(public_key)
 
-    if not verify_signature(public_key, message, signature):
+    if not verify_signature(public_key, transaction, signature):
         return jsonify({"error": "Invalid signature"}), 403
 
     if channel.is_open:
         channel.basic_publish(exchange='', routing_key='transactions', body=json.dumps(data))
     else:
-        # reconectar o loggear el error
         reconnect()
         
     return jsonify({"message": "Transaction received and queued in RabbitMQ"}), 200
 
 def reconnect():
     global connection, channel
-    connection = pika.BlockingConnection(pika.ConnectionParameters('rabbitmq'))
-    channel = connection.channel()
-    channel.queue_declare(queue='transactions')
+    while True:
+        try:
+            connection = pika.BlockingConnection(pika.ConnectionParameters(
+                host=RABBITMQ_HOST,
+                port=RABBITMQ_PORT,
+                credentials=pika.PlainCredentials(RABBITMQ_USER, RABBITMQ_PASS)
+            ))
+            channel = connection.channel()
+            channel.queue_declare(queue='transactions', durable=True)
+            channel.exchange_declare(exchange='block_challenge', exchange_type='topic', durable=True)
+            print("🔁 Reconnected to RabbitMQ")
+            break
+        except pika.exceptions.AMQPConnectionError as e:
+            print(f"🔌 Reconnection failed: {e}. Retrying in 5 seconds...")
+            time.sleep(5)
 
 # Función para agregar relleno Base64
 def add_b64_padding(b64_string):
     return b64_string + '=' * (-len(b64_string) % 4)
 
-def verify_signature(jwk, message, signature_b64):
+def verify_signature(jwk, transaction, signature_b64):
     try:
+        message = f"{transaction['user_from']}|{transaction['user_to']}|{transaction['amount']}"
+
         print(f"[DEBUG] JWK: {jwk}")
         print(f"[DEBUG] Message: {message}")
         print(f"[DEBUG] Signature (base64): {signature_b64}")
@@ -451,7 +472,6 @@ def register_key():
 
     return jsonify({"message": "Public key registered successfully"}), 200
 
-
 def create_genesis_block():
     genesis_block = {
         "id": "genesis_block",
@@ -555,6 +575,8 @@ if __name__ == '__main__':
 
     # 💥 Generar claves del usuario génesis si es necesario
     register_universal_account_key()
-
+    
+    # 💥 Inicializar prefijo de bloques o recuperarlo de Redis
     inicializar_prefijo()
+
     app.run(host='0.0.0.0', port=8080, debug=False)

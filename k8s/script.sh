@@ -9,4 +9,4 @@ kubectl apply -f ./headless-coordinador.yaml
 kubectl apply -f ./statefulset-coordinador.yaml
 
 # Aplicar el archivo de configuración de Kubernetes
-kubectl apply -f ./service-coordinador.yaml
+#kubectl apply -f ./service-coordinador.yaml
