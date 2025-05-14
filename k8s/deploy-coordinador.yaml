@@ -15,8 +15,8 @@ spec:
     spec:
       containers:
       - name: coordinador
-        image: leoduville5/coordinador:v29
-        imagePullPolicy: Always
+        image: leoduville5/coordinador:latest
+        imagePullPolicy: Always   
         resources:
           requests:
             memory: "100Mi"
