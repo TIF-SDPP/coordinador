@@ -92,7 +92,8 @@ def process_packages():
                         "random_num_max": max_random,
                     }
                     # Publish the package to" the 'blocks' topic exchange in RabbitMQ
-                    channel.basic_publish(exchange='block_challenge', routing_key='blocks', body=json.dumps(block))
+                    channel.basic_publish(exchange='', routing_key='block_challenge', body=json.dumps(block))
+
                     print(f"Package with block ID {block_id} sent to the 'blocks' topic exchange")
                     # Increment block ID for the next package
                 
@@ -117,7 +118,8 @@ channel = connection.channel()
 # Declare queues
 channel.queue_declare(queue='transactions')
 # Declare the topic exchange
-channel.exchange_declare(exchange='block_challenge', exchange_type='topic', durable=True)
+#channel.exchange_declare(exchange='block_challenge', exchange_type='topic', durable=True)
+channel.queue_declare(queue='block_challenge')
 
 # --- APP side --- 
 app = Flask(__name__)
@@ -186,7 +188,7 @@ def reconnect():
             ))
             channel = connection.channel()
             channel.queue_declare(queue='transactions', durable=True)
-            channel.exchange_declare(exchange='block_challenge', exchange_type='topic', durable=True)
+            channel.queue_declare(queue='block_challenge', durable=True)
             print("🔁 Reconnected to RabbitMQ")
             break
         except pika.exceptions.AMQPConnectionError as e:
