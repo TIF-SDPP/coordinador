@@ -238,11 +238,21 @@ def get_balance(user_id):
 
     for block in blocks:
         block_data = json.loads(block)
-        recompensa = block_data.get('tx_recompensa')        
+
+        recompensa = block_data.get('tx_recompensa')
         if recompensa and recompensa.get('user_to') == user_id:
             balance += float(recompensa.get('amount', 0))
 
+        transactions = block_data.get('transactions', [])
+        for tx_data in transactions:
+            tx = tx_data.get('transaction', {})
+            if tx.get('user_to') == user_id:
+                balance += float(tx.get('amount', 0))
+            if tx.get('user_from') == user_id:
+                balance -= float(tx.get('amount', 0))
+
     return jsonify({'balance': balance})
+
 
 def balance_universal():
     balance = 1_000_000
