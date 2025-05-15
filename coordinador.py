@@ -31,6 +31,7 @@ RABBITMQ_USER = os.getenv("RABBITMQ_USER")
 RABBITMQ_PASS = os.getenv("RABBITMQ_PASS")
 RABBITMQ_PORT = os.getenv("RABBITMQ_PORT")
 
+print(RABBITMQ_PASS)
 # Get the current script's directory
 current_dir = os.path.dirname(os.path.abspath(__file__))
 # Get the parent directory
