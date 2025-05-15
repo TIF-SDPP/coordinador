@@ -423,11 +423,7 @@ def receive_solved_task():
 
 @app.route('/metrics', methods=['GET'])
 def get_metrics():
-    workers = {
-        "worker_cpu": {"cant": 0, "processing_time": 0},
-        "worker_gpu": {"cant": 0, "processing_time": 0},
-        "worker_user": {"cant": 0, "processing_time": 0}
-    }
+    prefix_metrics = {}
 
     blocks = redis_utils.redis_client.lrange('blockchain', 0, -1)
 
@@ -435,22 +431,33 @@ def get_metrics():
         try:
             block_data = json.loads(block)
             worker_type = block_data.get("worker_type")
-            timestamp = block_data.get("processing_time", 0)
-            print("metric")
-            print(block_data)
+            prefix = block_data.get("prefix")
+            processing_time = block_data.get("processing_time", 0)
 
-            if worker_type in workers:
-                workers[worker_type]["cant"] += 1
-                workers[worker_type]["processing_time"] += timestamp
+            if not prefix or not worker_type:
+                continue
+
+            if prefix not in prefix_metrics:
+                prefix_metrics[prefix] = {
+                    "worker_cpu": {"cant": 0, "processing_time": 0},
+                    "worker_user": {"cant": 0, "processing_time": 0}
+                }
+
+            if worker_type in prefix_metrics[prefix]:
+                prefix_metrics[prefix][worker_type]["cant"] += 1
+                prefix_metrics[prefix][worker_type]["processing_time"] += processing_time
+
         except json.JSONDecodeError:
-            continue  # Ignorar bloques corruptos
+            continue  
 
-
-    for worker_type, data in workers.items():
+    for prefix in prefix_metrics:
+        for worker_type in prefix_metrics[prefix]:
+            data = prefix_metrics[prefix][worker_type]
             if data["cant"] > 0:
-                data["processing_time"] = data["processing_time"] / data["cant"]
+                data["processing_time"] /= data["cant"]
 
-    return jsonify({'data': workers}), 200
+    return jsonify({'data': prefix_metrics}), 200
+
 
 def is_token_valid(token):
     try:
