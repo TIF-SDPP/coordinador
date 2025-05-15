@@ -45,3 +45,10 @@ jobs:
       run: |
         kubectl apply -f k8s/deploy-coordinador.yaml
         kubectl apply -f k8s/headless-coordinador.yaml
+
+    - name: Create Kubernetes Secret for Coordinador
+      run: |
+        kubectl create secret generic coordinador-secrets \
+          --from-literal=REDIS_PASSWORD=${{ secrets.REDIS_PASSWORD }} \
+          --from-literal=RABBITMQ_PASS=${{ secrets.RABBITMQ_PASS }} \
+          --dry-run=client -o yaml | kubectl apply -f -
