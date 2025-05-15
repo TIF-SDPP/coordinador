@@ -426,7 +426,7 @@ def get_metrics():
     prefix_metrics = {}
 
     blocks = redis_utils.redis_client.lrange('blockchain', 0, -1)
-
+    print(blocks)
     for block in blocks:
         try:
             block_data = json.loads(block)
