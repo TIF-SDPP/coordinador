@@ -20,6 +20,7 @@ from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from cryptography.hazmat.primitives import serialization
 import base64
 from redis_utils import RedisUtils
+from redis.sentinel import Sentinel
 
 load_dotenv()
 
@@ -38,13 +39,16 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 # Get the parent directory
 parent_dir = os.path.dirname(current_dir)
 
+redis_master = None
+
+redis_utils = RedisUtils()
+
 # Valores de umbral para resolver rápido y lento
 threshold_fast = 50.0  # Tiempo en segundos para considerar que el worker resuelve rápido
 threshold_slow = 100.0  # Tiempo en segundos para considerar que el worker resuelve lento
 
 print("Parent Directory:", parent_dir)
 sys.path.append(parent_dir)
-redis_utils = RedisUtils()
 
 # Function to calculate the hash using the provided number and base string
 # New hash function
@@ -129,7 +133,7 @@ CORS(app)
 
 def inicializar_prefijo():
     if redis_utils.redis_client.get('prefix_key') is None:
-        redis_utils.redis_client.set('prefix_key', '0000')  # Valor inicial por defecto
+        redis_master.redis_client.set('prefix_key', '0000')  # Valor inicial por defecto
         print("Prefijo inicial insertado en Redis: 0000")
     else:
         print("Prefijo ya presente en Redis:", get_prefix_from_redis())
@@ -307,14 +311,14 @@ def ajustar_prefijo_coordinador(tiempo_resolucion):
 def aumentar_prefijo():
     prefix = get_prefix_from_redis()  # Obtener el prefijo actual desde Redis
     prefix = "0" + prefix  # Añadir más ceros al prefijo
-    redis_utils.redis_client.set('prefix_key', prefix)  # Actualizar el prefijo en Redis
+    redis_master.redis_client.set('prefix_key', prefix)  # Actualizar el prefijo en Redis
     print(f"Nuevo prefijo aumentado: {prefix}")
 
 def disminuir_prefijo():
     prefix = get_prefix_from_redis()  # Obtener el prefijo actual desde Redis
     if len(prefix) > 1:
         prefix = prefix[1:]  # Eliminar un cero del prefijo
-        redis_utils.redis_client.set('prefix_key', prefix)  # Actualizar el prefijo en Redis
+        redis_master.redis_client.set('prefix_key', prefix)  # Actualizar el prefijo en Redis
     print(f"Nuevo prefijo disminuido: {prefix}")
 
 @app.route('/solved_task', methods=['POST'])
@@ -414,8 +418,8 @@ def receive_solved_task():
             print("------ Final Block -------")
 
              # Guardar el bloque en Redis
-
-            redis_utils.post_message(message=data)
+            consultar_maestro()
+            redis_master.post_message(message=data)
 
         return jsonify({'message': 'Block validated and added to the blockchain.'}), 201
     else:
@@ -482,7 +486,7 @@ def register_key():
         return jsonify({"error": "Missing user_id or public_key"}), 400
 
     redis_key = f"public_key:{user_id}"
-    redis_utils.redis_client.set(redis_key, json.dumps(public_key))
+    redis_master.redis_client.set(redis_key, json.dumps(public_key))
 
     return jsonify({"message": "Public key registered successfully"}), 200
 
@@ -505,7 +509,7 @@ def create_genesis_block():
     # Agregarlo como primer bloque si aún no existe
     latest = redis_utils.get_latest_element()
     if latest is None:
-        redis_utils.post_message(genesis_block)
+        redis_master.post_message(genesis_block)
         print("🧱 Bloque génesis creado con fondos para universal_account")
     else:
         print("🧱 Ya existe un bloque, génesis no necesario")
@@ -560,7 +564,7 @@ def register_universal_account_key():
     }
 
     # Guardar clave pública en Redis
-    redis_utils.redis_client.set(redis_key, json.dumps(jwk))
+    redis_master.redis_client.set(redis_key, json.dumps(jwk))
     print("🔐 Clave pública de universal_account registrada en Redis")
 
     # Guardar la clave privada en un archivo .pem
@@ -578,6 +582,28 @@ def register_universal_account_key():
 
     print(f"Clave privada guardada en {pem_file_path}")
 
+def consultar_maestro():
+
+    global redis_master
+    
+    # Lista de tuplas (host, puerto) de los Sentinels
+    sentinels = [
+        ('redis-sentinel-0.service-redis-sentinel.default.svc.cluster.local', 26379),
+        ('redis-sentinel-1.service-redis-sentinel.default.svc.cluster.local', 26379),
+        ('redis-sentinel-2.service-redis-sentinel.default.svc.cluster.local', 26379),
+    ]
+
+    # Conectar al Sentinel
+    sentinel = Sentinel(sentinels, socket_timeout=0.1)
+
+    master_address = sentinel.discover_master('mymaster')
+
+    print(f"Master: {master_address[0]}:{master_address[1]}")
+
+    host_master = master_address[0].split(":")[0]
+
+    redis_master = RedisUtils(host=host_master)
+
 # Run the process_packages method in a separate thread
 import threading
 process_packages_thread = threading.Thread(target=process_packages)
@@ -592,5 +618,7 @@ if __name__ == '__main__':
     
     # 💥 Inicializar prefijo de bloques o recuperarlo de Redis
     inicializar_prefijo()
+
+    consultar_maestro()
 
     app.run(host='0.0.0.0', port=8080, debug=False)
