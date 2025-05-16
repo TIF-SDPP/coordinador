@@ -616,6 +616,9 @@ process_packages_thread = threading.Thread(target=process_packages)
 process_packages_thread.start()
 
 if __name__ == '__main__':
+
+    consultar_maestro()
+
     # 💥 Crear bloque génesis si es necesario
     create_genesis_block()
 
@@ -624,7 +627,5 @@ if __name__ == '__main__':
     
     # 💥 Inicializar prefijo de bloques o recuperarlo de Redis
     inicializar_prefijo()
-
-    consultar_maestro()
 
     app.run(host='0.0.0.0', port=8080, debug=False)
