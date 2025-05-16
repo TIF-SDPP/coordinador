@@ -297,11 +297,11 @@ def ajustar_prefijo_coordinador(tiempo_resolucion):
     Función que ajusta la dificultad en el Coordinador en función del tiempo de resolución.
     Si la resolución es rápida, incrementa el prefijo, si es lenta, lo disminuye.
     """
-    if tiempo_resolucion < THRESHOLD_FAST:  # Si se resolvió rápidamente
+    if tiempo_resolucion < float(THRESHOLD_FAST):  # Si se resolvió rápidamente
         # Notificar al Pool Manager para aumentar el prefijo
         print("Resolución rápida, aumentando dificultad (prefijo).")
         aumentar_prefijo()
-    elif tiempo_resolucion > THRESHOLD_SLOW:  # Si se resolvió lentamente
+    elif tiempo_resolucion > float(THRESHOLD_SLOW):  # Si se resolvió lentamente
         # Notificar al Pool Manager para disminuir el prefijo
         print("Resolución lenta, disminuyendo dificultad (prefijo).")
         disminuir_prefijo()
