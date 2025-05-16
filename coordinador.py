@@ -122,10 +122,9 @@ connection = connect_rabbitmq()
 
 channel = connection.channel()
 # Declare queues
-channel.queue_declare(queue='transactions')
-# Declare the topic exchange
-#channel.exchange_declare(exchange='block_challenge', exchange_type='topic', durable=True)
-channel.queue_declare(queue='block_challenge')
+
+channel.queue_declare(queue='transactions', durable=True)
+channel.queue_declare(queue='block_challenge', durable=True)
 
 # --- APP side --- 
 app = Flask(__name__)
@@ -355,6 +354,7 @@ def receive_solved_task():
             return jsonify({'message': 'Block already solved by another node. Discarding...'}), 200
         else:
             print("Block does not exist, adding to the network")
+            consultar_maestro()
 
             # Ajustar el prefijo basado en el tiempo de resolución
             ajustar_prefijo_coordinador(tiempo_resolucion)
@@ -417,8 +417,7 @@ def receive_solved_task():
             print(data)
             print("------ Final Block -------")
 
-             # Guardar el bloque en Redis
-            consultar_maestro()
+            # Guardar el bloque en Redis
             redis_master.post_message(message=data)
 
         return jsonify({'message': 'Block validated and added to the blockchain.'}), 201
@@ -430,7 +429,7 @@ def get_metrics():
     prefix_metrics = {}
 
     blocks = redis_utils.redis_client.lrange('blockchain', 0, -1)
-    print(blocks)
+    
     for block in blocks:
         try:
             block_data = json.loads(block)
