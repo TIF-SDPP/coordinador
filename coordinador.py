@@ -24,6 +24,7 @@ from redis.sentinel import Sentinel
 
 load_dotenv()
 
+# Variables de entorno
 AUTH0_DOMAIN = os.getenv("AUTH0_DOMAIN")
 API_AUDIENCE = os.getenv("API_AUDIENCE")
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST")
@@ -31,21 +32,22 @@ AUTH0_USERINFO_URL = os.getenv("AUTH0_USERINFO_URL")
 RABBITMQ_USER = os.getenv("RABBITMQ_USER")
 RABBITMQ_PASS = os.getenv("RABBITMQ_PASS")
 RABBITMQ_PORT = os.getenv("RABBITMQ_PORT")
+SENTINEL0_HOST = os.getenv("SENTINEL0_HOST")
+SENTINEL1_HOST = os.getenv("SENTINEL1_HOST")
+SENTINEL2_HOST = os.getenv("SENTINEL2_HOST")
+SENTINEL_PORT = os.getenv("SENTINEL_PORT")
+THRESHOLD_FAST = os.getenv("THRESHOLD_FAST")
+THRESHOLD_SLOW = os.getenv("THRESHOLD_SLOW")
 
-print('RABBITMQ_PASS')
-print(RABBITMQ_PASS)
 # Get the current script's directory
 current_dir = os.path.dirname(os.path.abspath(__file__))
 # Get the parent directory
 parent_dir = os.path.dirname(current_dir)
 
 redis_master = None
+current_master_host = None
 
 redis_utils = RedisUtils()
-
-# Valores de umbral para resolver rápido y lento
-threshold_fast = 50.0  # Tiempo en segundos para considerar que el worker resuelve rápido
-threshold_slow = 100.0  # Tiempo en segundos para considerar que el worker resuelve lento
 
 print("Parent Directory:", parent_dir)
 sys.path.append(parent_dir)
@@ -295,11 +297,11 @@ def ajustar_prefijo_coordinador(tiempo_resolucion):
     Función que ajusta la dificultad en el Coordinador en función del tiempo de resolución.
     Si la resolución es rápida, incrementa el prefijo, si es lenta, lo disminuye.
     """
-    if tiempo_resolucion < threshold_fast:  # Si se resolvió rápidamente
+    if tiempo_resolucion < THRESHOLD_FAST:  # Si se resolvió rápidamente
         # Notificar al Pool Manager para aumentar el prefijo
         print("Resolución rápida, aumentando dificultad (prefijo).")
         aumentar_prefijo()
-    elif tiempo_resolucion > threshold_slow:  # Si se resolvió lentamente
+    elif tiempo_resolucion > THRESHOLD_SLOW:  # Si se resolvió lentamente
         # Notificar al Pool Manager para disminuir el prefijo
         print("Resolución lenta, disminuyendo dificultad (prefijo).")
         disminuir_prefijo()
@@ -591,23 +593,27 @@ def register_universal_account_key():
 def consultar_maestro():
 
     global redis_master
-    
-    # Lista de tuplas (host, puerto) de los Sentinels
+    global current_master_host
+
     sentinels = [
-        ('redis-sentinel-0.service-redis-sentinel.default.svc.cluster.local', 26379),
-        ('redis-sentinel-1.service-redis-sentinel.default.svc.cluster.local', 26379),
-        ('redis-sentinel-2.service-redis-sentinel.default.svc.cluster.local', 26379),
+        (SENTINEL0_HOST, SENTINEL_PORT),
+        (SENTINEL1_HOST, SENTINEL_PORT),
+        (SENTINEL2_HOST, SENTINEL_PORT),
     ]
 
-    # Conectar al Sentinel
     sentinel = Sentinel(sentinels, socket_timeout=0.1)
-
     master_address = sentinel.discover_master('mymaster')
+    host_master = master_address[0]
 
-    print(f"Master: {master_address[0]}:{master_address[1]}")
+    print(f"Master: {host_master}:{master_address[1]}")
 
-    host_master = master_address[0].split(":")[0]
+    if host_master == current_master_host:
+        print("El master no cambió, no se vuelve a crear el objeto Redis.")
+        return
 
+    # Si cambió el master
+    print("Cambiando conexión al nuevo master.")
+    current_master_host = host_master
     redis_master = RedisUtils(host=host_master)
 
 # Run the process_packages method in a separate thread
@@ -617,6 +623,7 @@ process_packages_thread.start()
 
 if __name__ == '__main__':
 
+    # 💥 Crear bloque génesis si es necesario
     consultar_maestro()
 
     # 💥 Crear bloque génesis si es necesario
